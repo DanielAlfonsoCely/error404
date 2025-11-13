@@ -5,17 +5,17 @@ echo "   Iniciando entorno Django + PostgreSQL"
 echo "========================================="
 echo ""
 
-# 1) Levantar (intenta docker-compose, luego docker compose)
+# 1) Levantar (primero docker-compose, luego docker compose)
 if ! docker-compose up -d --build 2>/dev/null; then
   docker compose up -d --build
 fi
 
 if [ $? -ne 0 ]; then
-    echo "Error al construir los contenedores."
+    echo "Error al construir los contenedores"
     exit 1
 fi
 
-# 2. Esperar a que PostgreSQL arranque
+# 2) Esperar a que Postgres este listo
 echo "=========================================="
 echo "Esperando a que la base de datos inicie..."
 echo "=========================================="
@@ -24,29 +24,40 @@ until docker compose exec -T db pg_isready -U "$DB_USER" >/dev/null 2>&1; do
   echo "  ...aún no, reintentando en 2s"
   sleep 2
 done
-echo "PostgreSQL listo."
+echo "PostgreSQL listo"
 
-# Crear proyecto Django si no existe
-if [ ! -f "Proyecto/SAFE/manage.py" ]; then
-    echo "Creando proyecto Django..."
-    docker exec django_web django-admin startproject config .
-    docker exec django_web python manage.py startapp core
-fi
+# 3) Esperar a que las migraciones de Django terminen
+echo ""
+echo "==========================================="
+echo "Esperando a que las migraciones terminen..."
+echo "==========================================="
 
-# Ejecutar migraciones de Django
-echo "=========================================="
-echo "Configurando base de datos Django..."
-echo "=========================================="
-docker compose exec -T web python manage.py migrate
+MAX_ATTEMPTS=20
+ATTEMPT=0
 
-# Cargar tablas SQL personalizadas si existen
-if [ -f "Proyecto/SAFE/db/init.sql" ]; then
-  echo "Cargando init.sql..."
-  docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" < Proyecto/SAFE/db/init.sql
+while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+  if docker compose logs web | grep -q "Starting development server"; then
+    echo "Django está listo"
+    break
+  fi
+  
+  if docker compose logs web | grep -q "Error"; then
+    echo "ERROR: Se detectó un error en las migraciones, revisa los logs"
+    exit 1
+  fi
+  
+  echo "  ...aún migrando, reintentando en 2s (intento $((ATTEMPT+1))/$MAX_ATTEMPTS)"
+  sleep 2
+  ATTEMPT=$((ATTEMPT+1))
+done
+
+if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+  echo "TIMEOUT: Las migraciones tardaron demasiado, revisa los logs"
+  exit 1
 fi
 
 echo ""
-echo "============================================"
-echo "   Entorno listo en http://localhost:8000"
-echo "============================================"
+echo "=========================================="
+echo "  Entorno listo en http://localhost:8000"
+echo "=========================================="
 read -p "Presiona Enter para continuar..."
